@@ -1,11 +1,12 @@
 import ast
 import os
-import re
 import pickle
+import re
 
 old_models_dir = "./PlayAPI/restApi/old_models"
 models_dir = "./PlayAPI/restApi/models"
 managers_dir = "./PlayAPI/restApi/managers"
+
 
 def convert_value(value="", **kwargs):
     options = ""
@@ -70,8 +71,9 @@ def convert_fuction(line=""):
     line = line.replace("mdb.", "") \
         .replace('.find_one', '.objects.{}get'.format("" if 'query = ' in line else "values().")) \
         .replace('.find', '.objects.{}raw'.format("" if 'query = ' in line else "values().")) \
-        .replace('.collection.aggregate([', '.objects.aggregate(')\
-        .replace('], explain=False)', ', explain=False)')\
+        .replace('.raw()', '.all()') \
+        .replace('.collection.aggregate([', '.objects.aggregate(') \
+        .replace('], explain=False)', ', explain=False)') \
         .replace('.sort(', '.order_by(') \
         .replace('ObjectId(', 'bson.ObjectId(') \
         .replace(' ObjectId.', ' bson.ObjectId.')
@@ -89,6 +91,7 @@ def convert_models_file(old_model_dir, model_dir, manager_dir, model_name, metho
         is_function = False
         is_structure = False
         is_default_value = False
+        begin_fine_one = False
         class_meta = ""
         structure = ""
         property = ""
@@ -97,7 +100,8 @@ def convert_models_file(old_model_dir, model_dir, manager_dir, model_name, metho
         new_funtion_import = ""
         models = []
         managers = []
-
+        find_one_func_block = ""
+        var_tempt = ""
         for line in old_model_file:
             if 'class ' in line:
                 is_class = True
@@ -149,7 +153,8 @@ def convert_models_file(old_model_dir, model_dir, manager_dir, model_name, metho
                 if 'bson.' in line and 'import bson' not in new_funtion_import:
                     import_module = 'import bson\n'
                     new_funtion_import += import_module
-                if (' datetime' in line or 'timedelta' in line) and 'from datetime import datetime' not in new_funtion_import:
+                if (
+                        ' datetime' in line or 'timedelta' in line) and 'from datetime import datetime' not in new_funtion_import:
                     import_module = 'from datetime import datetime, timedelta\n'
                     new_funtion_import += import_module
                 if 'current_app.' in line and 'from flask' not in new_funtion_import:
@@ -211,8 +216,31 @@ def convert_models_file(old_model_dir, model_dir, manager_dir, model_name, metho
                 except Exception as e:
                     pass
 
+                if 'values().get(' in line:
+                    begin_fine_one = True
+                    var_tempt = re.search('(\w+) (.+?)', line).group(1)
+                    if 'return' not in var_tempt:
+                        var_tempt += ' ='
+                    if 'import sys' not in new_funtion_import:
+                        import_module = 'import sys\n'
+                        new_funtion_import += import_module
+                    if 'import traceback' not in new_funtion_import:
+                        import_module = 'import traceback\n'
+                        new_funtion_import += import_module
+                    find_one_func_block += '        try:\n'
 
-                new_fuction_file += line
+                if begin_fine_one:
+                    find_one_func_block += f'            {line}'
+                    if '})' in line or 'filter)' in line:
+                        begin_fine_one = False
+                        except_block = '        except Exception:\n' \
+                            f'            traceback.print_exc(limit=2, file=sys.stdout)\n' \
+                            f'            {var_tempt} None\n'
+                        find_one_func_block += except_block
+                        new_fuction_file += find_one_func_block
+                        find_one_func_block = ""
+                else:
+                    new_fuction_file += line
 
         models = list(set(models))
         import_models = ""
@@ -235,6 +263,7 @@ def convert_models_file(old_model_dir, model_dir, manager_dir, model_name, metho
 
         manager_file.writelines(f'{new_funtion_import}\n\n')
         manager_file.writelines(new_fuction_file)
+
 
 def convert_old_models(methods_dict, utils_func_dict):
     for root, dirs, files in os.walk(old_models_dir):
@@ -259,7 +288,8 @@ def convert_old_models(methods_dict, utils_func_dict):
 
                     manager_name = f'{classes[0].name.lower()}_manager.py'
                     manager_dir = f'{managers_dir}/{manager_name}'
-                    convert_models_file(old_model_dir, model_dir, manager_dir, classes[0].name, methods_dict, utils_func_dict)
+                    convert_models_file(old_model_dir, model_dir, manager_dir, classes[0].name, methods_dict,
+                                        utils_func_dict)
 
 
 def get_list_func_utils():
@@ -313,4 +343,3 @@ if __name__ == "__main__":
     # for key, value in utils_func_dict.items():
     #     if value == 0:
     #         print(key)
-
